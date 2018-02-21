@@ -1,5 +1,7 @@
 package calc
 
+import "sort"
+
 type setEntry struct{}
 
 type symbolSet map[string]setEntry
@@ -35,6 +37,15 @@ func (s symbolSet) Has(name string) bool {
 
 func (s symbolSet) Empty() bool {
 	return len(s) == 0
+}
+
+func (s symbolSet) AppendNames(names []string) []string {
+	start := len(names)
+	for name := range s {
+		names = append(names, name)
+	}
+	sort.Strings(names[start:])
+	return names
 }
 
 // TakeAnyOne will remove a single arbitrary item from the set and return it.

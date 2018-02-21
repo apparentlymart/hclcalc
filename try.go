@@ -147,19 +147,20 @@ func (u ui) expr(src []byte) {
 }
 
 func (u ui) directive(name string, toks hclsyntax.Tokens, src []byte) {
-	var diags hcl.Diagnostics
 	switch name {
 
 	case "defs":
-		order := u.table.Names()
+		entries, _ := u.table.Values()
+
 		nameLen := 0
-		for _, name := range order {
-			if len(name) > nameLen {
+		for _, entry := range entries {
+			if len(entry.Symbol) > nameLen {
 				nameLen = len(name)
 			}
 		}
 
-		for _, name := range order {
+		for _, entry := range entries {
+			name := entry.Symbol
 			src := bytes.TrimSpace(u.table.Source(name))
 			if len(src) != 0 {
 				fmt.Printf("%*s = %s\n", nameLen, name, src)
@@ -169,17 +170,19 @@ func (u ui) directive(name string, toks hclsyntax.Tokens, src []byte) {
 		}
 
 	case "vals":
-		vals := u.table.Values()
-		order := u.table.Names()
+		entries, diags := u.table.Values()
+		u.showDiags(diags)
+
 		nameLen := 0
-		for _, name := range order {
-			if len(name) > nameLen {
+		for _, entry := range entries {
+			if len(entry.Symbol) > nameLen {
 				nameLen = len(name)
 			}
 		}
 
-		for _, name := range order {
-			val := vals[name]
+		for _, entry := range entries {
+			name := entry.Symbol
+			val := entry.Value
 			switch {
 			case !val.IsWhollyKnown():
 				src := bytes.TrimSpace(u.table.Source(name))
@@ -195,6 +198,7 @@ func (u ui) directive(name string, toks hclsyntax.Tokens, src []byte) {
 		}
 
 	default:
+		var diags hcl.Diagnostics
 		diags = append(diags, &hcl.Diagnostic{
 			Severity: hcl.DiagError,
 			Summary:  "Invalid Directive",
