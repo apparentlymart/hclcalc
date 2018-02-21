@@ -30,6 +30,10 @@ func NewTable() *Table {
 	}
 }
 
+func (t *Table) Source(name string) []byte {
+	return t.syms[name].Source
+}
+
 func (t *Table) Define(name string, expr Expression) {
 	t.cacheMutex.Lock()
 	defer t.cacheMutex.Unlock()
