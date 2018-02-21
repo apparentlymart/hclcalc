@@ -111,11 +111,21 @@ Tokens:
 
 func (u ui) assign(lvalueSrc, exprSrc []byte) {
 	lvalueTrav, diags := hclsyntax.ParseTraversalAbs(lvalueSrc, "", hcl.Pos{Line: 1, Column: 1})
-	if len(lvalueTrav) != 1 {
+	if len(lvalueTrav) != 1 || diags.HasErrors() {
+		// Maybe this is a function definition
+		funcExpr, funcExprDiags := calc.ParseExpression(lvalueSrc, "")
+		if !funcExprDiags.HasErrors() {
+			callExpr, ok := funcExpr.Expression.(*hclsyntax.FunctionCallExpr)
+			if ok {
+				u.defineFunc(callExpr, lvalueSrc, exprSrc)
+				return
+			}
+		}
+
 		diags = append(diags, &hcl.Diagnostic{
 			Severity: hcl.DiagError,
 			Summary:  "Invalid assignment target",
-			Detail:   fmt.Sprintf("Cannot assign to %s: a single identifier is required.", bytes.TrimSpace(lvalueSrc)),
+			Detail:   fmt.Sprintf("Cannot assign to %s: a single identifier or a function signature is required.", bytes.TrimSpace(lvalueSrc)),
 		})
 		u.showDiags(diags)
 		return
@@ -130,6 +140,48 @@ func (u ui) assign(lvalueSrc, exprSrc []byte) {
 	}
 
 	u.table.Define(sym, expr)
+}
+
+func (u ui) defineFunc(lvalueExpr *hclsyntax.FunctionCallExpr, lvalueSrc []byte, exprSrc []byte) {
+	name := lvalueExpr.Name
+
+	// We use the function call syntax for our definition syntax, but for
+	// definition we require that all of the "arguments" must be single
+	// identifiers that declare parameter names.
+	var paramNames []string
+	varParam := lvalueExpr.ExpandFinal
+	var paramDiags hcl.Diagnostics
+	for _, paramExpr := range lvalueExpr.Args {
+		var traversal hcl.Traversal
+		travExpr, ok := paramExpr.(*hclsyntax.ScopeTraversalExpr)
+		if ok {
+			traversal = travExpr.Traversal
+		}
+		if len(traversal) != 1 {
+			paramDiags = append(paramDiags, &hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Invalid parameter name",
+				Detail:   "Each parameter must be a single name.",
+				Subject:  paramExpr.Range().Ptr(),
+			})
+			continue
+		}
+
+		paramNames = append(paramNames, traversal.RootName())
+	}
+	if paramDiags.HasErrors() {
+		u.showDiagsSrc(paramDiags, lvalueSrc)
+		return
+	}
+
+	symName := name + "()"
+	expr, exprDiags := calc.ParseExpression(exprSrc, symName)
+	if exprDiags.HasErrors() {
+		u.showDiags(exprDiags)
+		return
+	}
+
+	u.table.DefineFunc(name, paramNames, varParam, expr)
 }
 
 func (u ui) expr(src []byte) {

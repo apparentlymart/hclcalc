@@ -8,10 +8,12 @@ import (
 	"github.com/hashicorp/hcl2/hcl"
 	"github.com/hashicorp/hcl2/hcl/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
+	"github.com/zclconf/go-cty/cty/function"
 )
 
 type Table struct {
 	syms   map[string]Expression
+	funcs  map[string]function.Function
 	all    symbolSet
 	reqs   edgeSet
 	reqdBy edgeSet
@@ -20,6 +22,7 @@ type Table struct {
 func NewTable() *Table {
 	return &Table{
 		syms:   make(map[string]Expression),
+		funcs:  make(map[string]function.Function),
 		all:    make(symbolSet),
 		reqs:   make(edgeSet),
 		reqdBy: make(edgeSet),
@@ -47,6 +50,67 @@ func (t *Table) Define(name string, expr Expression) {
 
 func (t *Table) Remove(name string) {
 	t.remove(name)
+}
+
+func (t *Table) DefineFunc(name string, params []string, varParam bool, expr Expression) {
+	var varName string
+	if varParam {
+		params, varName = params[:len(params)-1], params[len(params)-1]
+	}
+
+	spec := &function.Spec{}
+	for _, paramName := range params {
+		spec.Params = append(spec.Params, function.Parameter{
+			Name: paramName,
+			Type: cty.DynamicPseudoType,
+		})
+	}
+	if varParam {
+		spec.VarParam = &function.Parameter{
+			Name: varName,
+			Type: cty.DynamicPseudoType,
+		}
+	}
+
+	extraFuncs := map[string]function.Function{
+		name: noSelfCallFunc(name),
+	}
+
+	impl := func(args []cty.Value) (cty.Value, error) {
+		argVars := make(map[string]cty.Value)
+
+		// The cty function machinery guarantees that we have at least
+		// enough args to fill all of our params.
+		for i, paramName := range params {
+			argVars[paramName] = args[i]
+		}
+		if spec.VarParam != nil {
+			varArgs := args[len(params):]
+			argVars[varName] = cty.TupleVal(varArgs)
+		}
+
+		result, diags := t.eval(expr, argVars, extraFuncs)
+		if diags.HasErrors() {
+			// Smuggle the diagnostics out via the error channel, since
+			// a diagnostics sequence implements error. Caller can
+			// type-assert this to recover the individual diagnostics
+			// if desired.
+			return cty.DynamicVal, diags
+		}
+		return result, nil
+	}
+	spec.Type = func(args []cty.Value) (cty.Type, error) {
+		val, err := impl(args)
+		return val.Type(), err
+	}
+	spec.Impl = func(args []cty.Value, retType cty.Type) (cty.Value, error) {
+		return impl(args)
+	}
+	t.funcs[name] = function.New(spec)
+}
+
+func (t *Table) RemoveFunc(name string) {
+	delete(t.funcs, name)
 }
 
 func (t *Table) remove(name string) {
@@ -146,6 +210,7 @@ func (t *Table) Values() ([]TableSymbolValue, hcl.Diagnostics) {
 
 	ctx := globalCtx.NewChild()
 	ctx.Variables = make(map[string]cty.Value, len(t.all))
+	ctx.Functions = t.funcs
 
 	cycled := t.visitSymbols(t.all, func(name string, expr Expression) {
 		val, valDiags := expr.Value(ctx)
@@ -180,10 +245,18 @@ func (t *Table) Values() ([]TableSymbolValue, hcl.Diagnostics) {
 }
 
 func (t *Table) Eval(expr Expression) (cty.Value, hcl.Diagnostics) {
+	return t.eval(expr, nil, nil)
+}
+
+func (t *Table) eval(expr Expression, extraVars map[string]cty.Value, extraFuncs map[string]function.Function) (cty.Value, hcl.Diagnostics) {
 	var diags hcl.Diagnostics
 
 	reqd := newSymbolSet()
 	t.addRequiredSymbols(expr, reqd)
+
+	for name := range extraVars {
+		reqd.Remove(name)
+	}
 
 	var undef []string
 	for name := range reqd {
@@ -203,6 +276,7 @@ func (t *Table) Eval(expr Expression) (cty.Value, hcl.Diagnostics) {
 
 	ctx := globalCtx.NewChild()
 	ctx.Variables = make(map[string]cty.Value, len(reqd))
+	ctx.Functions = t.funcs
 
 	cycled := t.visitSymbols(reqd, func(name string, expr Expression) {
 		val, valDiags := expr.Value(ctx)
@@ -220,6 +294,12 @@ func (t *Table) Eval(expr Expression) (cty.Value, hcl.Diagnostics) {
 			Summary:  "Dependency cycle",
 			Detail:   fmt.Sprintf("There is a dependency cycle between the following variables: %s.", strings.Join(cycled.AppendNames(nil), ", ")),
 		})
+	}
+
+	if extraVars != nil || extraFuncs != nil {
+		ctx = ctx.NewChild()
+		ctx.Variables = extraVars
+		ctx.Functions = extraFuncs
 	}
 
 	ret, valDiags := expr.Value(ctx)
