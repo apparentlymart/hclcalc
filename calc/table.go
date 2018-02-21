@@ -307,6 +307,16 @@ func (t *Table) eval(expr Expression, extraVars map[string]cty.Value, extraFuncs
 	return ret, diags
 }
 
+func (t *Table) NamesWithPrefix(prefix string) []string {
+	var ret []string
+	for name := range t.syms {
+		if strings.HasPrefix(name, prefix) {
+			ret = append(ret, name)
+		}
+	}
+	return ret
+}
+
 var missingExpr = Expression{
 	Expression: &hclsyntax.LiteralValueExpr{
 		Val: cty.DynamicVal,

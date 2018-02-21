@@ -62,10 +62,6 @@ func (u ui) executor(inp string) {
 	}
 }
 
-func (u ui) completer(d prompt.Document) []prompt.Suggest {
-	return nil
-}
-
 func (u ui) exprOrAssign(toks hclsyntax.Tokens, src []byte) {
 	// First we'll see if this looks like an assignment. Any expression that
 	// has an equals sign outside of brackets is potentially an assignment,
