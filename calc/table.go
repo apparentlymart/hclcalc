@@ -227,8 +227,6 @@ func (t *Table) Eval(expr Expression) (cty.Value, hcl.Diagnostics) {
 	return ret, diags
 }
 
-var globalCtx = &hcl.EvalContext{}
-
 var missingExpr = Expression{
 	Expression: &hclsyntax.LiteralValueExpr{
 		Val: cty.DynamicVal,
